@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация Bot и Dispatcher
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://username.github.io/valentine-site')
+MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://qklafk.github.io/valentine-site/')
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
