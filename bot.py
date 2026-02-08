@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 
 # Инициализация Bot и Dispatcher
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://qklafk.github.io/valentine-site/')
+MINI_APP_URL = os.getenv('MINI_APP_URL')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-RELATIONSHIP_START_DATE = os.getenv('RELATIONSHIP_START_DATE', '2025-12-01')
-GIRLFRIEND_ID = int(os.getenv('GIRLFRIEND_ID', 0))
-OWNER_ID = int(os.getenv('OWNER_ID', 0))
+RELATIONSHIP_START_DATE = os.getenv('RELATIONSHIP_START_DATE')
+GIRLFRIEND_ID = int(os.getenv('GIRLFRIEND_ID'))
+OWNER_ID = int(os.getenv('OWNER_ID'))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -41,8 +41,9 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # Инициализация scheduler для напоминаний
 scheduler = AsyncIOScheduler()
 
-# Хранилище активных пользователей (для срабатывания напоминаний)
-active_users = set()
+# Хранилища для активных напоминаний (для GIRLFRIEND_ID)
+morning_active = False  # Изменено на False, чтобы активировать только после /start от Иры
+evening_active = False  # Изменено на False, чтобы активировать только после /start от Иры
 
 # State группы для будущих функций
 class QuizState(StatesGroup):
@@ -201,7 +202,8 @@ async def generate_reminder(reminder_type: str) -> str:
 
 async def send_morning_reminder():
     """Отправляет утреннее напоминание"""
-    if GIRLFRIEND_ID not in active_users:
+    global morning_active
+    if not morning_active:
         return
     
     reminder_text = await generate_reminder("morning")
@@ -224,7 +226,8 @@ async def send_morning_reminder():
 
 async def send_evening_reminder():
     """Отправляет вечернее напоминание"""
-    if GIRLFRIEND_ID not in active_users:
+    global evening_active
+    if not evening_active:
         return
     
     reminder_text = await generate_reminder("evening")
@@ -250,12 +253,14 @@ async def send_evening_reminder():
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Обработчик команды /start"""
+    global morning_active, evening_active
     first_name = message.from_user.first_name or "Иришка"
     user_id = message.from_user.id
     
-    # Добавляем пользователя в активные (для напоминаний)
+    # Активируем напоминания для GIRLFRIEND_ID
     if user_id == GIRLFRIEND_ID:
-        active_users.add(GIRLFRIEND_ID)
+        morning_active = True
+        evening_active = True
         logger.info(f"Ира активирована для напоминаний")
     
     welcome_text = (
@@ -281,7 +286,11 @@ async def cmd_help(message: types.Message):
         "⏱️ Команды:\n"
         "/days - Счетчик дней вместе (в днях, часах, секундах)\n"
         "/confession - Случайное признание (новое каждый раз)\n"
-        "/help - Эта справка\n\n"
+        "/help - Эта справка\n"
+        "/disable_morning - Отключить утренние напоминания\n"
+        "/enable_morning - Включить утренние напоминания\n"
+        "/disable_evening - Отключить вечерние напоминания\n"
+        "/enable_evening - Включить вечерние напоминания\n\n"
         "🎭 Дополнительно:\n"
         "Напиши мне что-нибудь - я отвечу! 💕"
     )
@@ -299,7 +308,11 @@ async def callback_help(callback_query: CallbackQuery):
         "⏱️ Команды:\n"
         "/days - Счетчик дней вместе (в днях, часах, секундах)\n"
         "/confession - Случайное признание (новое каждый раз)\n"
-        "/help - Эта справка\n\n"
+        "/help - Эта справка\n"
+        "/disable_morning - Отключить утренние напоминания\n"
+        "/enable_morning - Включить утренние напоминания\n"
+        "/disable_evening - Отключить вечерние напоминания\n"
+        "/enable_evening - Включить вечерние напоминания\n\n"
         "🎭 Дополнительно:\n"
         "Напиши мне что-нибудь - я отвечу! 💕"
     )
@@ -364,7 +377,7 @@ async def cmd_days(message: types.Message):
     
     # Вычисляем всё время в разных единицах
     total_hours = days * 24 + hours
-    total_munutes = total_hours * 60 + minutes
+    total_minutes = total_hours * 60 + minutes
     total_seconds = days * 86400 + hours * 3600 + minutes * 60 + secs
     
     # Красивый формат для дней
@@ -378,7 +391,7 @@ async def cmd_days(message: types.Message):
     response = (
         f"💕 Мы вместе {days_display} дней\n"
         f"в часах это {total_hours} часов\n"
-        f"в минутах это {total_munutes:,} минут\n"
+        f"в минутах это {total_minutes:,} минут\n"
         f"а в секундах целых {total_seconds:,}\n\n"
         f"Каждая секунда с тобой - волшебство ✨\n"
         f"Открой сюрприз, чтобы узнать, как сильно ты мне нужна 💌"
@@ -407,6 +420,62 @@ async def cmd_confession(message: types.Message):
         response,
         reply_markup=get_main_keyboard()
     )
+
+
+@dp.message(Command("disable_morning"))
+async def cmd_disable_morning(message: types.Message):
+    """Обработчик команды /disable_morning - отключает утренние напоминания"""
+    global morning_active
+    user_id = message.from_user.id
+    if user_id != GIRLFRIEND_ID and user_id != OWNER_ID:
+        await message.answer("Эта команда доступна только для Иры или владельца.")
+        return
+    
+    morning_active = False
+    await message.answer("Утренние напоминания отключены. 💤")
+    logger.info("Утренние напоминания отключены.")
+
+
+@dp.message(Command("enable_morning"))
+async def cmd_enable_morning(message: types.Message):
+    """Обработчик команды /enable_morning - включает утренние напоминания"""
+    global morning_active
+    user_id = message.from_user.id
+    if user_id != GIRLFRIEND_ID and user_id != OWNER_ID:
+        await message.answer("Эта команда доступна только для Иры или владельца.")
+        return
+    
+    morning_active = True
+    await message.answer("Утренние напоминания включены. ☀️")
+    logger.info("Утренние напоминания включены.")
+
+
+@dp.message(Command("disable_evening"))
+async def cmd_disable_evening(message: types.Message):
+    """Обработчик команды /disable_evening - отключает вечерние напоминания"""
+    global evening_active
+    user_id = message.from_user.id
+    if user_id != GIRLFRIEND_ID and user_id != OWNER_ID:
+        await message.answer("Эта команда доступна только для Иры или владельца.")
+        return
+    
+    evening_active = False
+    await message.answer("Вечерние напоминания отключены. 🌙💤")
+    logger.info("Вечерние напоминания отключены.")
+
+
+@dp.message(Command("enable_evening"))
+async def cmd_enable_evening(message: types.Message):
+    """Обработчик команды /enable_evening - включает вечерние напоминания"""
+    global evening_active
+    user_id = message.from_user.id
+    if user_id != GIRLFRIEND_ID and user_id != OWNER_ID:
+        await message.answer("Эта команда доступна только для Иры или владельца.")
+        return
+    
+    evening_active = True
+    await message.answer("Вечерние напоминания включены. 🌙")
+    logger.info("Вечерние напоминания включены.")
 
 
 # ==================== ОБРАБОТЧИКИ ТЕКСТА ====================
