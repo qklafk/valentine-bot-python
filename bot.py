@@ -123,6 +123,40 @@ async def generate_confession() -> str:
         return "Ты для меня самая важная... 💕"
 
 
+
+async def generate_chat_response(user_message: str) -> str:
+    """Генерирует умный ответ на сообщение пользователя через ИИ"""
+    try:
+        system_prompt = (
+            "Ты - телеграм бот, созданный парнем (Сашей) как подарок для его девушки Иры (Иришки). "
+            "Ты должен отвечать на её сообщения теплыми, искренними и короткими ответами. "
+            "Помни: она очень важна! Будь внимательным, добрым и немного игривым. "
+            "Отвечай 1-2 предложениями максимум. Избегай лишних деталей. "
+            "Если она пишет что-то долгое - отвечай кратко и с любовью! 💕"
+        )
+        
+        message = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.8,
+            max_tokens=200,
+        )
+        
+        return message.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Ошибка генерации ответа: {e}")
+        return "Ты мне очень нравишься! 💕"
+
+
 async def generate_reminder(reminder_type: str) -> str:
     """Генерирует напоминание через Groq API"""
     try:
@@ -243,7 +277,7 @@ async def cmd_help(message: types.Message):
         "/confession - Случайное признание (новое каждый раз)\n"
         "/help - Эта справка\n\n"
         "🎭 Дополнительно:\n"
-        "Пиши \"люблю\" или \"ты мне\" - я отвечу! 💕"
+        "Напиши мне что-нибудь - я отвечу! 💕"
     )
     
     await message.answer(help_text, reply_markup=get_main_keyboard())
@@ -261,7 +295,7 @@ async def callback_help(callback_query: CallbackQuery):
         "/confession - Случайное признание (новое каждый раз)\n"
         "/help - Эта справка\n\n"
         "🎭 Дополнительно:\n"
-        "Пиши \"люблю\" или \"ты мне\" - я отвечу! 💕"
+        "Напиши мне что-нибудь - я отвечу! 💕"
     )
     
     await callback_query.message.edit_text(
@@ -371,46 +405,31 @@ async def cmd_confession(message: types.Message):
 
 # ==================== ОБРАБОТЧИКИ ТЕКСТА ====================
 
-@dp.message(F.text.contains("люб"))
-async def love_detector(message: types.Message):
-    """Реагирует на текст со словом 'люб'"""
-    response = (
-        "И я тебя люблю! 💕\n\n"
-        "Нажми кнопку ниже, чтобы увидеть сюрприз"
-    )
-    
-    await message.answer(
-        response,
-        reply_markup=get_main_keyboard()
-    )
-
-
-@dp.message(F.text.contains("ты мне"))
-async def feelings_detector(message: types.Message):
-    """Реагирует на текст 'ты мне'"""
-    response = (
-        "Ты - самый важный человек в моей жизни! 💕\n\n"
-        "Открой сюрприз и узнаешь подробности 💌"
-    )
-    
-    await message.answer(
-        response,
-        reply_markup=get_main_keyboard()
-    )
-
-
 @dp.message()
 async def default_handler(message: types.Message):
-    """Обработчик всех остальных сообщений"""
-    response = (
-        "Напиши /start и открой сюрприз! 💕\n"
-        "Или используй /help для справки"
-    )
-    
-    await message.answer(
-        response,
-        reply_markup=get_main_keyboard()
-    )
+    """Обрабатывает любые сообщения с ИИ-ответом"""
+    try:
+        # Показываем статус "печатает"
+        await bot.send_chat_action(
+            chat_id=message.chat.id,
+            action="typing"
+        )
+        
+        # Генерируем ответ через ИИ
+        response = await generate_chat_response(message.text)
+        
+        # Отправляем ответ с клавиатурой
+        await message.answer(
+            response,
+            reply_markup=get_main_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в default_handler: {e}")
+        await message.answer(
+            "Что-то пошло не так... Напиши /help 💕",
+            reply_markup=get_main_keyboard()
+        )
 
 
 # ==================== ОБРАБОТЧИК ERRORS ====================
