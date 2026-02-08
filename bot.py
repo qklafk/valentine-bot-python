@@ -2,10 +2,15 @@ import logging
 from typing import Optional
 from dotenv import load_dotenv
 import os
+from datetime import datetime
+import random
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from groq import Groq
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -22,9 +27,22 @@ logger = logging.getLogger(__name__)
 # Инициализация Bot и Dispatcher
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 MINI_APP_URL = os.getenv('MINI_APP_URL', 'https://qklafk.github.io/valentine-site/')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+RELATIONSHIP_START_DATE = os.getenv('RELATIONSHIP_START_DATE', '2025-12-01')
+GIRLFRIEND_ID = int(os.getenv('GIRLFRIEND_ID', 0))
+OWNER_ID = int(os.getenv('OWNER_ID', 0))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Инициализация Groq клиента
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Инициализация scheduler для напоминаний
+scheduler = AsyncIOScheduler()
+
+# Хранилище активных пользователей (для срабатывания напоминаний)
+active_users = set()
 
 # State группы для будущих функций
 class QuizState(StatesGroup):
@@ -34,7 +52,7 @@ class QuizState(StatesGroup):
 # ==================== ФУНКЦИИ ====================
 
 def get_main_keyboard() -> InlineKeyboardMarkup:
-    """Создает основную клавиатуру с кнопкой Mini App"""
+    """Создает основную клавиатуру с кнопкой Mini App и справкой"""
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -42,10 +60,149 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
                     text="💌 Открыть сюрприз",
                     web_app=WebAppInfo(url=MINI_APP_URL)
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❓ Справка",
+                    callback_data="help_callback"
+                )
             ]
         ]
     )
     return keyboard
+
+
+def get_days_together() -> tuple:
+    """Подсчитывает количество дней, часов, минут и секунд в отношениях"""
+    try:
+        start_date = datetime.strptime(RELATIONSHIP_START_DATE, '%Y-%m-%d %H:%M:%S')
+        now = datetime.now()
+        
+        time_diff = now - start_date
+        
+        days = time_diff.days
+        seconds = time_diff.seconds
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        
+        return days, hours, minutes, secs
+    except ValueError:
+        logger.error(f"Неверный формат даты: {RELATIONSHIP_START_DATE}")
+        return 0, 0, 0, 0
+
+
+async def generate_confession() -> str:
+    """Генерирует уникальное признание через Groq API"""
+    try:
+        message = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Напиши короткое и искреннее признание в любви для девушки. "
+                        "1-2 предложения максимум. Начини с имени (выбери либо 'Ира,', либо 'Иришка,'). "
+                        "Имя должно быть ТОЛЬКО в начале, больше оно не должно повторяться. "
+                        "Пиши простым, понятным языком без цветистых слов и лирики. "
+                        "Говори о реальных чувствах - почему она важна, что в ней нравится, как хорошо с ней. "
+                        "Примеры недопустимых вещей: повторение имени, лишние метафоры, штампы. "
+                        "Генерируй каждый раз что-то совершенно новое."
+                    )
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.9,  # Выше температура для большей оригинальности
+            max_tokens=200,
+        )
+        
+        confession = message.choices[0].message.content
+        return confession
+    except Exception as e:
+        logger.error(f"Ошибка генерации признания: {e}")
+        return "Ты для меня самая важная... 💕"
+
+
+async def generate_reminder(reminder_type: str) -> str:
+    """Генерирует напоминание через Groq API"""
+    try:
+        prompts = {
+            "morning": (
+                "Напиши короткое, теплое утреннее сообщение-напоминание о любви для девушки по имени Ира (или Иришка). "
+                "1-2 предложения максимум. Начни с её имени. "
+                "Пожелай ей удачного дня, скажи что-то приятное. "
+                "Пиши просто и искренне, без лирики и штампов. "
+                "Каждый раз другой текст."
+            ),
+            "evening": (
+                "Напиши короткое, нежное вечернее сообщение перед сном для девушки по имени Ира (или Иришка). "
+                "1-2 предложения максимум. Начни с её имени. "
+                "Пожелай ей сладких снов, скажи что-то приятное о том, как было хорошо с ней. "
+                "Пиши просто и искренне, без лирики и штампов. "
+                "Каждый раз другой текст."
+            )
+        }
+        
+        message = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompts[reminder_type]}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.85,
+            max_tokens=150,
+        )
+        
+        return message.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Ошибка генерации напоминания: {e}")
+        if reminder_type == "morning":
+            return "Доброе утро, Иришка! 🌅\nИмей чудесный день! Я думаю о тебе 💕"
+        else:
+            return "Спокойной ночи, Иришка! 🌙\nСладких снов тебе! 💕"
+
+
+async def send_morning_reminder():
+    """Отправляет утреннее напоминание"""
+    if GIRLFRIEND_ID not in active_users:
+        return
+    
+    reminder_text = await generate_reminder("morning")
+    
+    try:
+        await bot.send_message(
+            chat_id=GIRLFRIEND_ID,
+            text=f"☀️ Утреннее напоминание:\n\n{reminder_text}"
+        )
+        logger.info(f"Утреннее напоминание отправлено Ире (ID: {GIRLFRIEND_ID})")
+        
+        # Отправляем копию владельцу для тестирования
+        await bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"📤 Отправлено Ире:\n☀️ Утреннее напоминание:\n\n{reminder_text}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке утреннего напоминания: {e}")
+
+
+async def send_evening_reminder():
+    """Отправляет вечернее напоминание"""
+    if GIRLFRIEND_ID not in active_users:
+        return
+    
+    reminder_text = await generate_reminder("evening")
+    
+    try:
+        await bot.send_message(
+            chat_id=GIRLFRIEND_ID,
+            text=f"🌙 Вечернее напоминание:\n\n{reminder_text}"
+        )
+        logger.info(f"Вечернее напоминание отправлено Ире (ID: {GIRLFRIEND_ID})")
+        
+        # Отправляем копию владельцу для тестирования
+        await bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"📤 Отправлено Ире:\n🌙 Вечернее напоминание:\n\n{reminder_text}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке вечернего напоминания: {e}")
 
 
 # ==================== ОБРАБОТЧИКИ КОМАНД ====================
@@ -53,11 +210,17 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Обработчик команды /start"""
-    first_name = message.from_user.first_name or "Малышка"
+    first_name = message.from_user.first_name or "Иришка"
+    user_id = message.from_user.id
+    
+    # Добавляем пользователя в активные (для напоминаний)
+    if user_id == GIRLFRIEND_ID:
+        active_users.add(GIRLFRIEND_ID)
+        logger.info(f"Ира активирована для напоминаний")
     
     welcome_text = (
-        f"💕 Привет, {first_name}!\n\n"
-        f"Я приготовил для тебя что-то очень милое на День Святого Валентина... 💘"
+        f"💕 Привет, Иришка!\n\n"
+        f"Я приготовил для тебя что-то на День Святого Валентина... 💘"
     )
     
     await message.answer(
@@ -65,21 +228,73 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_keyboard()
     )
     
-    logger.info(f"User {message.from_user.id} ({first_name}) started the bot")
+    logger.info(f"User {user_id} ({first_name}) started the bot")
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     """Обработчик команды /help"""
     help_text = (
-        "Вот что я умею:\n\n"
-        "/start - Начать сначала\n"
-        "/help - Эта справка\n"
-        "/status - Статус бота\n\n"
-        "Просто нажми на кнопку '💌 Открыть сюрприз' чтобы увидеть мое признание! 💕"
+        "🎯 Вот что я умею:\n\n"
+        "📱 Основное:\n"
+        "💌 Открыть сюрприз\n\n"
+        "⏱️ Команды:\n"
+        "/days - Счетчик дней вместе (в днях, часах, секундах)\n"
+        "/confession - Случайное признание (новое каждый раз)\n"
+        "/help - Эта справка\n\n"
+        "🎭 Дополнительно:\n"
+        "Пиши \"люблю\" или \"ты мне\" - я отвечу! 💕"
     )
     
-    await message.answer(help_text)
+    await message.answer(help_text, reply_markup=get_main_keyboard())
+
+
+@dp.callback_query(lambda c: c.data == "help_callback")
+async def callback_help(callback_query: CallbackQuery):
+    """Обработчик кнопки справки"""
+    help_text = (
+        "🎯 Вот что я умею:\n\n"
+        "📱 Основное:\n"
+        "💌 Открыть сюрприз\n\n"
+        "⏱️ Команды:\n"
+        "/days - Счетчик дней вместе (в днях, часах, секундах)\n"
+        "/confession - Случайное признание (новое каждый раз)\n"
+        "/help - Эта справка\n\n"
+        "🎭 Дополнительно:\n"
+        "Пиши \"люблю\" или \"ты мне\" - я отвечу! 💕"
+    )
+    
+    await callback_query.message.edit_text(
+        help_text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="⬅️ Назад",
+                        callback_data="back_to_main"
+                    )
+                ]
+            ]
+        )
+    )
+    
+    await callback_query.answer()
+
+
+@dp.callback_query(lambda c: c.data == "back_to_main")
+async def callback_back_to_main(callback_query: CallbackQuery):
+    """Обработчик кнопки возврата в главное меню"""
+    main_text = (
+        f"💕 Привет, Иришка!\n\n"
+        f"Я приготовил для тебя что-то на День Святого Валентина... 💘"
+    )
+    
+    await callback_query.message.edit_text(
+        main_text,
+        reply_markup=get_main_keyboard()
+    )
+    
+    await callback_query.answer()
 
 
 @dp.message(Command("status"))
@@ -98,6 +313,58 @@ async def cmd_status(message: types.Message):
     
     await message.answer(
         status_text,
+        reply_markup=get_main_keyboard()
+    )
+
+
+@dp.message(Command("days"))
+async def cmd_days(message: types.Message):
+    """Обработчик команды /days - показывает счетчик дней в разных единицах"""
+    days, hours, minutes, secs = get_days_together()
+    
+    # Вычисляем всё время в разных единицах
+    total_hours = days * 24 + hours
+    total_munutes = total_hours * 60 + minutes
+    total_seconds = days * 86400 + hours * 3600 + minutes * 60 + secs
+    
+    # Красивый формат для дней
+    if days == 0:
+        days_display = "0 (сегодня наш первый день!)"
+    elif days == 1:
+        days_display = "1"
+    else:
+        days_display = str(days)
+    
+    response = (
+        f"💕 Мы вместе {days_display} дней\n"
+        f"в часах это {total_hours} часов\n"
+        f"в минутах это {total_munutes:,} минут\n"
+        f"а в секундах целых {total_seconds:,}\n\n"
+        f"Каждая секунда с тобой - волшебство ✨\n"
+        f"Открой сюрприз, чтобы узнать, как сильно ты мне нужна 💌"
+    )
+    
+    await message.answer(
+        response,
+        reply_markup=get_main_keyboard()
+    )
+
+
+@dp.message(Command("confession"))
+async def cmd_confession(message: types.Message):
+    """Обработчик команды /confession - генерирует ИИ признание"""
+    # Показываем индикатор печати
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    confession = await generate_confession()
+    
+    response = (
+        f"💕 Вот что я хочу сказать:\n\n"
+        f"{confession}\n\n"
+        f"Посмотри полный сюрприз - нажми кнопку ниже 💌"
+    )
+    
+    await message.answer(
+        response,
         reply_markup=get_main_keyboard()
     )
 
@@ -168,9 +435,36 @@ async def main():
     """Главная функция запуска"""
     logger.info("🤖 Бот запущен!")
     logger.info(f"Mini App URL: {MINI_APP_URL}")
+    logger.info(f"Напоминания будут отправляться Ире (ID: {GIRLFRIEND_ID})")
     
     # Установка обработчика ошибок
     dp.error.register(error_handler)
+    
+    # Инициализация scheduler
+    scheduler.start()
+    
+    # Настройка расписания для напоминаний
+    # Утреннее напоминание: случайное время с 9:00 до 12:00
+    morning_hour = random.randint(9, 11)
+    morning_minute = random.randint(0, 59)
+    scheduler.add_job(
+        send_morning_reminder,
+        CronTrigger(hour=morning_hour, minute=morning_minute),
+        id='morning_reminder',
+        name='Утреннее напоминание'
+    )
+    logger.info(f"⏰ Утреннее напоминание: {morning_hour:02d}:{morning_minute:02d}")
+    
+    # Вечернее напоминание: случайное время с 21:00 до 23:00
+    evening_hour = random.randint(21, 22)
+    evening_minute = random.randint(0, 59)
+    scheduler.add_job(
+        send_evening_reminder,
+        CronTrigger(hour=evening_hour, minute=evening_minute),
+        id='evening_reminder',
+        name='Вечернее напоминание'
+    )
+    logger.info(f"⏰ Вечернее напоминание: {evening_hour:02d}:{evening_minute:02d}")
     
     # Запуск polling'а
     try:
@@ -179,6 +473,7 @@ async def main():
             allowed_updates=dp.resolve_used_update_types()
         )
     finally:
+        scheduler.shutdown()
         await bot.session.close()
 
 
